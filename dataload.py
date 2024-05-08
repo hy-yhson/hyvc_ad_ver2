@@ -16,7 +16,7 @@ class ImageDataset(Dataset):
                  is_train=True,
                  resize=256,
                  cropsize=224,
-                 synthetic=False):
+                 synthetic=False,):
         
         super().__init__()
 
@@ -123,6 +123,7 @@ class ImageDataset(Dataset):
                 pass
             x = sorted([os.path.join(img_type_dir, f) for f in os.listdir(img_type_dir) if (f.endswith('.png') | f.endswith('.JPG') | f.endswith('.jpg'))])
             mask = sorted([os.path.join(mask_type_dir, f) for f in os.listdir(mask_type_dir) if (f.endswith('.png') | f.endswith('.JPG') | f.endswith('.jpg'))])
+
 
         if self.is_train:
             if self.synthetic:

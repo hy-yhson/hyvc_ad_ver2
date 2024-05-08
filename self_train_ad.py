@@ -25,6 +25,7 @@ import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 import pdb
 import dataload
+import math
 
 matplotlib.use('Agg')
 # device setup
@@ -35,8 +36,8 @@ def parse_args():
     parser = argparse.ArgumentParser('self-train_ad')
     parser.add_argument('--data_path', type=str, default='/data/yhson/mvtec_10_jiin')
     parser.add_argument('--save_path', type=str, default='/data/yhson/glml')
-    parser.add_argument('--feature_path', type=str, default='/data/yhson/dino_feature')
-    parser.add_argument('--synthetic_path', type=str, default='/data/jiin/sdas_perlin_10')
+    parser.add_argument('--feature_path', type=str, default='/home/yhson/Drive/datasets/dino_feature')
+    parser.add_argument('--synthetic_path', type=str, default='/data/yhson/sdas_perlin_10')
     parser.add_argument('--kl', action='store_true')
     parser.add_argument('--patch', action='store_true')
     parser.add_argument('--beta', action='store_true')
@@ -62,6 +63,8 @@ def parse_args():
     parser.add_argument('--alternative', action='store_true')
     parser.add_argument('--overlap', action='store_true')
     parser.add_argument('--beta_number', type=int, default=2)
+    parser.add_argument('--perlin_percent', type=float, default=0.0)
+    parser.add_argument('--num_workers', type=int, default=4)
 
     return parser.parse_args()
 
@@ -134,13 +137,14 @@ def save_model(model, saved_dir, weight_name):
     }
     torch.save(check_point, os.path.join(saved_dir, weight_name))
 
-def set_wandb(names, class_name, lr, num_epochs, batch_size, random, noise, threshold, noise_threshold):
+def set_wandb(names, class_name, lr, num_epochs, batch_size, random, noise, threshold, noise_threshold, dataset_name, perlin_percent):
     wandb.init(project=class_name,
                config={"learning_rate": lr,
                        "num_epochs": num_epochs,
                        "batch_size": batch_size,
                        },
-                name=names+'lr_'+str(lr)+'_'+str(num_epochs)+'_bs_'+str(batch_size)+'_random_'+str(random)+'_'+noise+'_t='+str(threshold)+'_n='+str(noise_threshold),
+                name=names+'lr_'+str(lr)+'_'+str(num_epochs)+'_bs_'+str(batch_size)+'_random_'+str(random)+'_'+noise+'_t='+\
+                    str(threshold)+'_n='+str(noise_threshold)+'_'+str(dataset_name)+'_perlin_per_'+str(perlin_percent),
                 )
 
 def main():
@@ -166,9 +170,11 @@ def main():
 
     results = []
 
+    dataset_name = args.data_path.split('/')[-1]
     for class_name in CLASS_NAMES:
         fix_seed(args.seed)
-        set_wandb(args.name, class_name, args.lr, args.epoch, args.batch_size, args.random, args.noise, args.threshold, args.noise_threshold)
+        set_wandb(args.name, class_name, args.lr, args.epoch, args.batch_size, args.random, args.noise, args.threshold, \
+                  args.noise_threshold, dataset_name, args.perlin_percent)
 
         saved_dir = os.path.join(args.save_path, 'results', class_name)
         os.makedirs(saved_dir, exist_ok=True)
@@ -195,8 +201,8 @@ def main():
         
         if args.synthetic:
             synthetic_dataset = dataload.ImageDataset(dataset_path=args.synthetic_path, class_name=class_name, synthetic=True)
-        local_loader = DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, shuffle=True, drop_last=True, num_workers=16)
-        mini_loader = DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=16)
+        local_loader = DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, shuffle=True, drop_last=True, num_workers=args.num_workers)
+        mini_loader = DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=args.num_workers)
         
         if args.overlap:
             test_features = np.load(os.path.join(args.feature_path, class_name+'_overlap_test.npy')).squeeze()
@@ -392,7 +398,8 @@ def main():
                     if args.synthetic:
                         synthetic_ids = []
                         synthetic_features = []
-                        for i in range(args.batch_size):
+                        #for i in range(args.batch_size): # org
+                        for i in range(math.floor(args.batch_size * args.perlin_percent)):
                             a = np.random.randint(len(synthetic_dataset))
                             while a in synthetic_ids:
                                 a = np.random.randint(len(synthetic_dataset))
