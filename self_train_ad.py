@@ -60,10 +60,11 @@ def parse_args():
     parser.add_argument('--llambda', type=float, default=1)
     parser.add_argument('--weight', type=float, default=0.5)
     parser.add_argument('--iter', type=int, default=0)
+    parser.add_argument('--beta_number', type=int, default=15)
     parser.add_argument('--alternative', action='store_true')
     parser.add_argument('--overlap', action='store_true')
-    parser.add_argument('--beta_number', type=int, default=2)
-    parser.add_argument('--perlin_percent', type=float, default=0.0)
+    parser.add_argument('--balancing', action='store_true')
+    parser.add_argument('--ratio', type=float, default=0.1)
     parser.add_argument('--num_workers', type=int, default=4)
 
     return parser.parse_args()
@@ -137,14 +138,13 @@ def save_model(model, saved_dir, weight_name):
     }
     torch.save(check_point, os.path.join(saved_dir, weight_name))
 
-def set_wandb(names, class_name, lr, num_epochs, batch_size, random, noise, threshold, noise_threshold, dataset_name, perlin_percent):
+def set_wandb(names, class_name, lr, num_epochs, batch_size, random, noise, threshold, noise_threshold):
     wandb.init(project=class_name,
                config={"learning_rate": lr,
                        "num_epochs": num_epochs,
                        "batch_size": batch_size,
                        },
-                name=names+'lr_'+str(lr)+'_'+str(num_epochs)+'_bs_'+str(batch_size)+'_random_'+str(random)+'_'+noise+'_t='+\
-                    str(threshold)+'_n='+str(noise_threshold)+'_'+str(dataset_name)+'_perlin_per_'+str(perlin_percent),
+                name=names+'lr_'+str(lr)+'_'+str(num_epochs)+'_bs_'+str(batch_size)+'_random_'+str(random)+'_'+noise+'_t='+str(threshold)+'_n='+str(noise_threshold),
                 )
 
 def main():
@@ -170,11 +170,9 @@ def main():
 
     results = []
 
-    dataset_name = args.data_path.split('/')[-1]
     for class_name in CLASS_NAMES:
         fix_seed(args.seed)
-        set_wandb(args.name, class_name, args.lr, args.epoch, args.batch_size, args.random, args.noise, args.threshold, \
-                  args.noise_threshold, dataset_name, args.perlin_percent)
+        set_wandb(args.name, class_name, args.lr, args.epoch, args.batch_size, args.random, args.noise, args.threshold, args.noise_threshold)
 
         saved_dir = os.path.join(args.save_path, 'results', class_name)
         os.makedirs(saved_dir, exist_ok=True)
@@ -201,6 +199,7 @@ def main():
         
         if args.synthetic:
             synthetic_dataset = dataload.ImageDataset(dataset_path=args.synthetic_path, class_name=class_name, synthetic=True)
+            synthetic_loader = DataLoader(synthetic_dataset, batch_size=int(args.batch_size * args.ratio), pin_memory=True, shuffle=True, drop_last=True, num_workers=args.num_workers)
         local_loader = DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, shuffle=True, drop_last=True, num_workers=args.num_workers)
         mini_loader = DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=args.num_workers)
         
@@ -306,17 +305,22 @@ def main():
                         if args.beta:
                             first_vector = []
                             second_vector = []
+
                             _x_stack = torch.concat(_x_stack)
                             _x_stack = _x_stack[_s_stack > 0.5]
                             _x_stack = _x_stack.reshape(-1, dim)
+
                             high_score_features = _f_stack[_s_stack > 0.5]
                             high_score_features = high_score_features.reshape(-1, dim)
+
                             high_score_distance, _ = index.search(np.ascontiguousarray(high_score_features), k=1)
                             high_score_distance = high_score_distance.T
                             high_score_distance = high_score_distance.squeeze()
+                            
                             confident_anomaly = np.argsort(high_score_distance)[::-1][:args.beta_number]
                             confident_anomaly = confident_anomaly.tolist()
                             confident_features = _x_stack[confident_anomaly]
+
                             for i in range(784):
                                 first = random.randint(0, args.beta_number-1)
                                 second = random.randint(0, args.beta_number-1)
@@ -324,8 +328,10 @@ def main():
                                     second = random.randint(0, args.beta_number-1)
                                 first_vector.append(confident_features[first])
                                 second_vector.append(confident_features[second])
+
                             first_vector = torch.stack(first_vector)
                             second_vector = torch.stack(second_vector)
+
                             syn_anomaly = a * first_vector + (1-a) * second_vector
                             syn_anomaly = syn_anomaly.unsqueeze(0)
 
@@ -396,23 +402,26 @@ def main():
                         local_label[distance > threshold] = 1
 
                     if args.synthetic:
-                        synthetic_ids = []
-                        synthetic_features = []
-                        #for i in range(args.batch_size): # org
-                        for i in range(math.floor(args.batch_size * args.perlin_percent)):
-                            a = np.random.randint(len(synthetic_dataset))
-                            while a in synthetic_ids:
-                                a = np.random.randint(len(synthetic_dataset))
-                            synthetic_ids.append(a)
-                            image, mask = synthetic_dataset[a]
-                            image = image.unsqueeze(0).to(device)
-                            _syn_feature = extract_feature(image, backbone, True)
-                            _syn_feature = _syn_feature.cpu()
-                            mask = mask.reshape(-1)
-                            _syn_feature = _syn_feature.reshape(-1, dim)
-                            synthetic_features.append(_syn_feature[mask == 1])
+                        # synthetic_ids = []
+                        count = 0
+                        # for i in range(int(args.batch_size * args.ratio)):
+                        for image, mask in synthetic_loader:
+                            if count == 0:
+                            # a = np.random.randint(len(synthetic_dataset))
+                            # while a in synthetic_ids:
+                                # a = np.random.randint(len(synthetic_dataset))
+                            # synthetic_ids.append(a)
+                            # image, mask = synthetic_dataset[a]
+                                image = image.to(device)
+                                _syn_feature = extract_feature(image, backbone, True)
+                                _syn_feature = _syn_feature.cpu()
+                                mask = mask.reshape(-1)
+                                _syn_feature = _syn_feature.reshape(-1, dim)
+                                synthetic_features = _syn_feature[mask == 1]
+                                count = count + 1
+                            else:
+                                break
                         
-                        synthetic_features = torch.cat(synthetic_features, dim=0)
                         local_label = local_label.reshape(-1)
                         local_label = torch.cat([local_label, torch.ones(synthetic_features.shape[0])])
                         x = x.reshape(-1, dim)
@@ -440,29 +449,35 @@ def main():
                 x = x.to(device)
                 local_label = local_label.to(device)
                 _, local_pred = localnet(x)
-                
+
                 if (args.threshold <= 1) and args.gaussian:
                     _copy = _copy.to(device)
                     _, gaussian_pred = localnet(_copy)
-                    if np.where(distance)[0].shape[0] == 0:
-                        _a_loss = 0
+                    if args.balancing:
+                        if np.where(distance)[0].shape[0] == 0:
+                            _a_loss = 0
+                        else:
+                            _a_loss = localnet_criterion(gaussian_pred[local_label == 1], local_label[local_label == 1])
+                        _n_loss = localnet_criterion(gaussian_pred[local_label == 0], local_label[local_label == 0])
+                        _loss = _a_loss + _n_loss
                     else:
-                        _a_loss = localnet_criterion(gaussian_pred[local_label == 1], local_label[local_label == 1])
-                    _n_loss = localnet_criterion(gaussian_pred[local_label == 0], local_label[local_label == 0])
-                    _loss = _a_loss + _n_loss
+                        _loss = localnet_criterion(gaussian_pred, local_label)
                 else:
-                    if np.where(distance)[0].shape[0] == 0:
-                        _a_loss = 0
+                    if args.balancing:
+                        if np.where(distance)[0].shape[0] == 0:
+                            _a_loss = 0
+                        else:
+                            _a_loss = localnet_criterion(local_pred[local_label == 1], local_label[local_label == 1])
+                        _n_loss = localnet_criterion(local_pred[local_label == 0], local_label[local_label == 0])
+                        _loss = _a_loss + _n_loss
                     else:
-                        _a_loss = localnet_criterion(local_pred[local_label == 1], local_label[local_label == 1])
-                    _n_loss = localnet_criterion(local_pred[local_label == 0], local_label[local_label == 0])
-                    _loss = _a_loss + _n_loss
+                        _loss = localnet_criterion(local_pred, local_label)
                 # _loss = localnet_criterion(local_pred, local_label)
 
                 if (iteration >= args.iter) and args.kl:
                     target = local_pred[:args.batch_size].reshape(-1)[matched_id[0]]
                     input = local_pred[:args.batch_size].reshape(-1)[matched_id[1]]
-                    _l_loss = 0.5 * (l_loss(input, (input + target) / 2) + l_loss(target, (input + target) / 2))
+                    _l_loss = 0.5 * (l_loss(input, (input + target)/2) + l_loss(target, (input + target)/2))
                 else:
                     _l_loss = 0
                 
