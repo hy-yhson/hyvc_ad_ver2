@@ -36,8 +36,8 @@ def parse_args():
     parser = argparse.ArgumentParser('self-train_ad')
     parser.add_argument('--data_path', type=str, default='/data/yhson/mvtec_10_jiin')
     parser.add_argument('--save_path', type=str, default='/data/yhson/glml')
-    parser.add_argument('--feature_path', type=str, default='/home/yhson/Drive/datasets/dino_feature')
-    parser.add_argument('--synthetic_path', type=str, default='/data/yhson/sdas_perlin_10')
+    parser.add_argument('--feature_path', type=str, default='/data/yhson/dino_feature')
+    parser.add_argument('--synthetic_path', type=str, default='/data/yhson/sdas_perlin_0')
     parser.add_argument('--kl', action='store_true')
     parser.add_argument('--patch', action='store_true')
     parser.add_argument('--beta', action='store_true')
@@ -174,7 +174,7 @@ def main():
     for class_name in CLASS_NAMES:
         fix_seed(args.seed)
         set_wandb(args.name, class_name, args.lr, args.epoch, args.batch_size, args.random, args.noise, args.threshold, \
-                  args.noise_threshold, dataset_name, args.perlin_percent)
+                 args.noise_threshold, dataset_name, args.perlin_percent)
 
         saved_dir = os.path.join(args.save_path, 'results', class_name)
         os.makedirs(saved_dir, exist_ok=True)
@@ -201,6 +201,11 @@ def main():
         
         if args.synthetic:
             synthetic_dataset = dataload.ImageDataset(dataset_path=args.synthetic_path, class_name=class_name, synthetic=True)
+            synthetic_loader = DataLoader(synthetic_dataset, 
+                                    batch_size=1, 
+                                    num_workers=args.num_workers, 
+                                    pin_memory=True)
+
         local_loader = DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, shuffle=True, drop_last=True, num_workers=args.num_workers)
         mini_loader = DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=args.num_workers)
         
@@ -400,18 +405,24 @@ def main():
                         synthetic_features = []
                         #for i in range(args.batch_size): # org
                         for i in range(math.floor(args.batch_size * args.perlin_percent)):
-                            a = np.random.randint(len(synthetic_dataset))
+                            a = np.random.randint(len(synthetic_loader))
                             while a in synthetic_ids:
-                                a = np.random.randint(len(synthetic_dataset))
+                                a = np.random.randint(len(synthetic_loader))
+                            
+                            for idx, image_mask in enumerate(synthetic_loader):
+                                image = image_mask[0].to(device)
+                                mask = image_mask[1]
+                                if idx == a:
+                                    #image, mask = synthetic_dataset[a]
+                                    #image = image.unsqueeze(0).to(device)
+                                    _syn_feature = extract_feature(image, backbone, True)
+                                    _syn_feature = _syn_feature.cpu()
+                                    mask = mask.reshape(-1)
+                                    _syn_feature = _syn_feature.reshape(-1, dim)
+                                    synthetic_features.append(_syn_feature[mask == 1])
+                            
                             synthetic_ids.append(a)
-                            image, mask = synthetic_dataset[a]
-                            image = image.unsqueeze(0).to(device)
-                            _syn_feature = extract_feature(image, backbone, True)
-                            _syn_feature = _syn_feature.cpu()
-                            mask = mask.reshape(-1)
-                            _syn_feature = _syn_feature.reshape(-1, dim)
-                            synthetic_features.append(_syn_feature[mask == 1])
-                        
+
                         synthetic_features = torch.cat(synthetic_features, dim=0)
                         local_label = local_label.reshape(-1)
                         local_label = torch.cat([local_label, torch.ones(synthetic_features.shape[0])])
